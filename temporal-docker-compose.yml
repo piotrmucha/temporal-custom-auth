@@ -1,0 +1,65 @@
+services:
+  keycloak:
+    container_name: keycloak
+    image: keycloak/keycloak:18.0.0
+    command: start-dev --http-port 20080
+    environment:
+      - KEYCLOAK_ADMIN=admin
+      - KEYCLOAK_ADMIN_PASSWORD=admin
+    ports:
+      - 20080:20080
+  temporaldb:
+    container_name: temporal-postgres
+    environment:
+      POSTGRES_PASSWORD: password
+      POSTGRES_USER: user
+      POSTGRES_DB: temporal
+    image: postgres:12
+    ports:
+      - 5435:5432
+  temporal:
+    container_name: temporal
+    depends_on:
+      - temporaldb
+    environment:
+      - DB=postgres12
+      - DB_PORT=5432
+      - POSTGRES_USER=user
+      - POSTGRES_PWD=password
+      - POSTGRES_SEEDS=temporaldb
+      - TEMPORAL_ADDRESS=temporal:7233
+      - TEMPORAL_CLI_ADDRESS=temporal:7233
+      - TEMPORAL_JWT_KEY_SOURCE1=http://keycloak:20080/realms/temporal/protocol/openid-connect/certs
+      - TEMPORAL_AUTH_CLAIM_MAPPER=default
+      - TEMPORAL_AUTH_ENABLED=true
+      - USE_INTERNAL_FRONTEND=1
+      - SERVICES=frontend:history:matching:worker:internal-frontend
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - 7233:7233
+  temporal-admin-tools:
+    container_name: temporal-admin-tools
+    depends_on:
+      - temporal
+    environment:
+      - TEMPORAL_ADDRESS=temporal:7233
+      - TEMPORAL_CLI_ADDRESS=temporal:7233
+    image: temporalio/admin-tools:1.28.1-tctl-1.18.4-cli-1.4.1
+    stdin_open: true
+    tty: true
+  temporal-ui:
+    container_name: temporal-ui
+    depends_on:
+      - temporal
+    environment:
+      - TEMPORAL_ADDRESS=temporal:7233
+      - TEMPORAL_AUTH_ENABLED=true
+      - TEMPORAL_AUTH_PROVIDER_URL=http://keycloak:20080/realms/temporal
+      - TEMPORAL_AUTH_CLIENT_ID=temporal-access
+      - TEMPORAL_AUTH_CLIENT_SECRET=<your-client-secret>
+      - TEMPORAL_AUTH_SCOPES=openid,profile,email
+    image: temporalio/ui:2.40.1
+    ports:
+      - 8089:8080
