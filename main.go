@@ -10,6 +10,7 @@ import (
 	"path"
 	"strings"
 
+	workflowservice "go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/server/common/api"
 	"go.temporal.io/server/common/authorization"
 	"go.temporal.io/server/common/config"
@@ -143,6 +144,12 @@ func (a *CustomAuthorizer) Authorize(
 ) (authorization.Result, error) {
 	fmt.Printf("[CustomAuth] API:  %s, Namespace: %s\n", target.APIName, target.Namespace)
 
+	// Extract WorkflowType based on the API being called
+	workflowType := extractWorkflowType(target)
+	if workflowType != "" {
+		fmt.Printf("[CustomAuth] WorkflowType: %s\n", workflowType)
+	}
+
 	if claims != nil {
 		fmt.Printf("[CustomAuth] Subject: %s\n", claims.Subject)
 		fmt.Printf("[CustomAuth] System Role: %s\n", roleToString(claims.System))
@@ -200,6 +207,55 @@ func (a *CustomAuthorizer) Authorize(
 	fmt.Printf("[CustomAuth] Role check failed (has: %s, required: %s) - Access DENIED\n",
 		roleToString(hasRole), roleToString(requiredRole))
 	return authorization.Result{Decision: authorization.DecisionDeny}, nil
+}
+
+func extractWorkflowType(target *authorization.CallTarget) string {
+	if target.Request == nil {
+		return ""
+	}
+
+	switch req := target.Request.(type) {
+	// StartWorkflowExecution
+	case *workflowservice.StartWorkflowExecutionRequest:
+		return req.GetWorkflowType().GetName()
+
+	// SignalWithStartWorkflowExecution
+	case *workflowservice.SignalWithStartWorkflowExecutionRequest:
+		return req.GetWorkflowType().GetName()
+
+	// ExecuteMultiOperation (can contain StartWorkflow)
+	case *workflowservice.ExecuteMultiOperationRequest:
+		for _, op := range req.GetOperations() {
+			if startReq := op.GetStartWorkflow(); startReq != nil {
+				return startReq.GetWorkflowType().GetName()
+			}
+		}
+
+	// For listing/describing workflows, you might want to filter based on query
+	case *workflowservice.ListWorkflowExecutionsRequest:
+		// You could parse the Query field to extract WorkflowType filter
+		return "" // Query parsing would be needed
+
+	// DescribeWorkflowExecution - workflow type not directly available in request
+	// but you could look it up if needed
+	case *workflowservice.DescribeWorkflowExecutionRequest:
+		return ""
+
+	// For TaskQueue-based operations, WorkflowType comes from the task itself
+	case *workflowservice.PollWorkflowTaskQueueRequest:
+		return "" // WorkflowType is not known until task is returned
+
+	// RespondWorkflowTaskCompleted - can contain child workflow starts
+	case *workflowservice.RespondWorkflowTaskCompletedRequest:
+		// Check commands for child workflow starts
+		for _, cmd := range req.GetCommands() {
+			if attr := cmd.GetStartChildWorkflowExecutionCommandAttributes(); attr != nil {
+				return attr.GetWorkflowType().GetName()
+			}
+		}
+	}
+
+	return ""
 }
 
 // getRequiredRole converts api.Access to authorization. Role
